@@ -28,6 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "object.h"
 #include "hashtable.h"
 #include "server.h"
 #include "serverassert.h"

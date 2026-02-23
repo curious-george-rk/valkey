@@ -101,7 +101,6 @@ static_assert(sizeof(off_t) >= 8, "off_t must be 64-bit; ensure _FILE_OFFSET_BIT
 #define dismissMemory zmadvise_dontneed
 
 #define VALKEYMODULE_CORE 1
-typedef struct serverObject robj;
 #include "valkeymodule.h" /* Modules API defines. */
 
 /* Following includes allow test functions to be called from main() */
@@ -788,96 +787,6 @@ typedef struct ValkeyModuleType moduleType;
 
 /* Macro to check if the client is in the middle of module based authentication. */
 #define clientHasModuleAuthInProgress(c) (((c)->module_data && (c)->module_data->module_auth_ctx != NULL))
-
-/* Objects encoding. Some kind of objects like Strings and Hashes can be
- * internally represented in multiple ways. The 'encoding' field of the object
- * is set to one of this fields for this object. */
-#define OBJ_ENCODING_RAW 0        /* Raw representation */
-#define OBJ_ENCODING_INT 1        /* Encoded as integer */
-#define OBJ_ENCODING_HASHTABLE 2  /* Encoded as a hashtable */
-#define OBJ_ENCODING_ZIPMAP 3     /* No longer used: old hash encoding. */
-#define OBJ_ENCODING_LINKEDLIST 4 /* No longer used: old list encoding. */
-#define OBJ_ENCODING_ZIPLIST 5    /* No longer used: old list/hash/zset encoding. */
-#define OBJ_ENCODING_INTSET 6     /* Encoded as intset */
-#define OBJ_ENCODING_SKIPLIST 7   /* Encoded as skiplist */
-#define OBJ_ENCODING_EMBSTR 8     /* Embedded sds string encoding */
-#define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
-#define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
-#define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
-
-#define OBJ_REFCOUNT_BITS 29
-#define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
-#define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
-#define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
-
-/* The serverObject struct is variable in size. It has several static fields that are always present,
- * followed by several optional variable-sized fields. The static fields are `type` through `refcount`
- * in the struct-defined order:
- *
- *    +------+----------+-----+-----------+-----------+-----------+----------+----
- *    | type | encoding | lru | hasexpire | hasembkey | hasembval | refcount | ...
- *    +------+----------+-----+-----------+-----------+-----------+----------+----
- *
- * The optional variable-sized embedded data has 2 possible layouts. If value is embedded (hasembval == 1)
- *  the `val_ptr` pointer is not used - instead the val data is embedded:
- *
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *    | type | encoding | lru | has* flags | refcount | expire | key_header_size | key sds | value data |
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *                                                      ^        ^                 ^         ^
- *                                                      |        |                 |         |
- *                                                      |        |                 |         +--- present because hasembval == 1
- *                                                      |        |                 |
- *                                                      |        +-----------------+--- present if hasembkey == 1
- *                                                      |
- *                                                      +--- present if hasexpire == 1
- *
- * Otherwise value is not embedded and we use the `val_ptr` pointer:
- *
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | key_header_size | key sds |
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *                                                      ^         ^        ^                 ^
- *                                                      |         |        |                 |
- *                                                      |         |        +-----------------+--- present if hasembkey == 1
- *                                                      |         |
- *                                                      |         +--- present if hasexpire == 1
- *                                                      |
- *                                                      +--- present because hasembval == 0
- */
-
-struct serverObject {
-    unsigned type : 4;
-    unsigned encoding : 4;
-    unsigned lru : LRULFU_BITS;
-    unsigned hasexpire : 1;
-    unsigned hasembkey : 1;
-    unsigned hasembval : 1;
-    unsigned refcount : OBJ_REFCOUNT_BITS;
-    void *val_ptr; /* Not always present. Use objectGetVal(obj) and
-                    * objectSetVal(obj, val) instead. */
-};
-static_assert(sizeof(struct serverObject) <= 8 + sizeof(void *), "unexpected size - verify struct is packed correctly");
-
-/* The string name for an object's type as listed above
- * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
- * and Module types have their registered name returned. */
-char *getObjectTypeName(robj *);
-
-/* Macro used to initialize an Object allocated on the stack.
- * Note that this macro is taken near the structure definition to make sure
- * we'll update it when the structure is changed, to avoid bugs like
- * bug #85 introduced exactly in this way. */
-#define initStaticStringObject(_var, _ptr)   \
-    do {                                     \
-        _var.refcount = OBJ_STATIC_REFCOUNT; \
-        _var.type = OBJ_STRING;              \
-        _var.encoding = OBJ_ENCODING_RAW;    \
-        _var.hasexpire = 0;                  \
-        _var.hasembkey = 0;                  \
-        _var.hasembval = 0;                  \
-        _var.val_ptr = _ptr;                 \
-    } while (0)
 
 struct evictionPoolEntry; /* Defined in evict.c */
 
@@ -3091,74 +3000,6 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with);
 void discardTransaction(client *c);
 void flagTransaction(client *c);
 void execCommandAbort(client *c, sds error);
-
-/* Object implementation */
-void decrRefCount(robj *o);
-void incrRefCount(robj *o);
-robj *makeObjectShared(robj *o);
-void freeStringObject(robj *o);
-void freeListObject(robj *o);
-void freeSetObject(robj *o);
-void freeZsetObject(robj *o);
-void freeHashObject(robj *o);
-void dismissObject(robj *o, size_t dump_size);
-robj *createObject(int type, void *ptr);
-void initObjectLRUOrLFU(robj *o);
-robj *createStringObject(const char *ptr, size_t len);
-robj *createStringObjectFromSds(const_sds s);
-robj *createRawStringObject(const char *ptr, size_t len);
-robj *tryCreateRawStringObject(const char *ptr, size_t len);
-robj *tryCreateStringObject(const char *ptr, size_t len);
-robj *dupStringObject(const robj *o);
-int isSdsRepresentableAsLongLong(sds s, long long *llval);
-int isObjectRepresentableAsLongLong(robj *o, long long *llongval);
-robj *tryObjectEncoding(robj *o);
-robj *tryObjectEncodingEx(robj *o, int try_trim);
-robj *getDecodedObject(robj *o);
-size_t stringObjectLen(robj *o);
-robj *createStringObjectFromLongLong(long long value);
-robj *createStringObjectFromLongLongForValue(long long value);
-robj *createStringObjectFromLongLongWithSds(long long value);
-robj *createStringObjectFromLongDouble(long double value, int humanfriendly);
-robj *createQuicklistObject(int fill, int compress);
-robj *createListListpackObject(void);
-robj *createSetObject(void);
-robj *createIntsetObject(void);
-robj *createSetListpackObject(void);
-robj *createHashObject(void);
-robj *createZsetObject(void);
-robj *createZsetListpackObject(void);
-robj *createStreamObject(void);
-robj *createModuleObject(moduleType *mt, void *value);
-int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
-int getPositiveLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
-int getRangeLongFromObjectOrReply(client *c, robj *o, long min, long max, long *target, const char *msg);
-int checkType(client *c, robj *o, int type);
-int getLongLongFromObjectOrReply(client *c, robj *o, long long *target, const char *msg);
-int getDoubleFromObjectOrReply(client *c, robj *o, double *target, const char *msg);
-int getDoubleFromObject(const robj *o, double *target);
-int getLongLongFromObject(robj *o, long long *target);
-int getLongDoubleFromObject(robj *o, long double *target);
-int getLongDoubleFromObjectOrReply(client *c, robj *o, long double *target, const char *msg);
-int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg);
-char *strEncoding(int encoding);
-int compareStringObjects(const robj *a, const robj *b);
-int collateStringObjects(const robj *a, const robj *b);
-int equalStringObjects(robj *a, robj *b);
-void trimStringObjectIfNeeded(robj *o, int trim_small_values);
-#define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
-
-/* Objects with val and/or key embedded */
-robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire);
-robj *objectSetExpire(robj *o, long long expire);
-void objectSetVal(robj *o, void *val);
-void objectUnembedVal(robj *o);
-void *objectGetVal(const robj *o);
-sds objectGetKey(const robj *o);
-long long objectGetExpire(const robj *o);
-uint8_t objectGetLFUFrequency(robj *o);
-uint32_t objectGetLRUIdleSecs(robj *o);
-uint32_t objectGetIdleness(robj *o);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

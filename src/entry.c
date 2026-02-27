@@ -120,7 +120,7 @@ bool entryHasEmbeddedValue(const entry *entry) {
 /* Returns true in case the entry holds a stringRef reference of the value.
  * Returns false otherwise. */
 bool entryHasStringRef(const entry *entry) {
-    return entryHasValuePtr(entry) && sdsGetAuxBit(entryGetField(entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF);
+    return sdsGetAuxBit(entryGetField(entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF);
 }
 
 /* Returns true in case the entry has expiration timestamp.

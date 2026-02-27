@@ -98,7 +98,7 @@ enum {
     FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF = 2,
     FIELD_SDS_AUX_BIT_MAX
 };
-static_assert(FIELD_SDS_AUX_BIT_MAX < sizeof(char) - SDS_TYPE_BITS, "too many sds bits are used for entry metadata");
+static_assert(FIELD_SDS_AUX_BIT_MAX <= sizeof(char) - SDS_TYPE_BITS, "too many sds bits are used for entry metadata");
 
 /* The entry pointer is the field sds, but that's an implementation detail. */
 sds entryGetField(const entry *entry) {
